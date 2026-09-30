@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iCloud Shared Photos",
+        "description": "Stellt die geteilte iCloud-Fotomediathek und Favoriten im Medienbrowser bereit. Es werden keine Zugangsdaten benötigt: Die angemeldete Sitzung der Apple-iCloud-Integration wird wiederverwendet."
+      }
+    },
+    "abort": {
+      "icloud_not_configured": "Bitte zuerst die Apple-iCloud-Integration einrichten. Diese Integration verwendet deren angemeldete Sitzung.",
+      "single_instance_allowed": "Bereits eingerichtet. Es ist nur eine Konfiguration möglich."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "iCloud Shared Photos Optionen",
+        "data": {
+          "max_items": "Maximale Anzahl Fotos pro Album",
+          "include_videos": "Videos einbeziehen",
+          "image_version": "Ausgelieferte Bildversion",
+          "cache_ttl": "Cache-Dauer für Albumlisten"
+        },
+        "data_description": {
+          "max_items": "Begrenzt die Anzahl gelisteter Einträge pro Album. Große Mediatheken werden seitenweise von iCloud geladen, bis das Limit erreicht ist.",
+          "include_videos": "Auch Videos auflisten (Live Photos werden immer als Standbild ausgeliefert).",
+          "image_version": "Automatisch liefert bei JPEG/PNG das Original und bei HEIC/RAW Apples JPEG-Ableitung.",
+          "cache_ttl": "Wie lange Albumlisten im Arbeitsspeicher gehalten werden. Fotos selbst werden nie gespeichert."
+        }
+      }
+    }
+  },
+  "selector": {
+    "image_version": {
+      "options": {
+        "auto": "Automatisch (JPEG/PNG Original, sonst JPEG-Ableitung)",
+        "original": "Original (evtl. HEIC)",
+        "medium": "Mittlere JPEG-Ableitung"
+      }
+    }
+  }
+}

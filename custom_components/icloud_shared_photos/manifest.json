@@ -1,0 +1,14 @@
+{
+  "domain": "icloud_shared_photos",
+  "name": "iCloud Shared Photos",
+  "codeowners": ["@neuhausf"],
+  "config_flow": true,
+  "dependencies": ["http", "icloud", "media_source"],
+  "documentation": "https://github.com/neuhausf/icloud_shared_photos",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/neuhausf/icloud_shared_photos/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

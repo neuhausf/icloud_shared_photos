@@ -1,0 +1,42 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "iCloud Shared Photos",
+        "description": "Exposes the iCloud Shared Photo Library and favorites in the media browser. No credentials are needed: the authenticated session of the Apple iCloud integration is reused."
+      }
+    },
+    "abort": {
+      "icloud_not_configured": "Set up the Apple iCloud integration first. This integration reuses its authenticated session.",
+      "single_instance_allowed": "Already configured. Only a single configuration is possible."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "iCloud Shared Photos options",
+        "data": {
+          "max_items": "Maximum photos per album",
+          "include_videos": "Include videos",
+          "image_version": "Image version to serve",
+          "cache_ttl": "Album listing cache duration"
+        },
+        "data_description": {
+          "max_items": "Limits how many items are listed per album. Large libraries are paged from iCloud until this limit is reached.",
+          "include_videos": "Also list videos (Live Photos are always served as still images).",
+          "image_version": "Automatic serves the original for JPEG/PNG and Apple's JPEG derivative for HEIC and RAW.",
+          "cache_ttl": "How long album listings are kept in memory. Photos themselves are never stored."
+        }
+      }
+    }
+  },
+  "selector": {
+    "image_version": {
+      "options": {
+        "auto": "Automatic (JPEG/PNG original, otherwise JPEG derivative)",
+        "original": "Original (may be HEIC)",
+        "medium": "Medium JPEG derivative"
+      }
+    }
+  }
+}

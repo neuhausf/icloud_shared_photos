@@ -1,0 +1,2 @@
+pytest-homeassistant-custom-component
+pyicloud==2.6.5
