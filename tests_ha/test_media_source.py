@@ -68,7 +68,12 @@ async def test_browse_resolve_and_stream(
     root = await media_source.async_browse_media(hass, f"media-source://{DOMAIN}")
     assert root.title == "iCloud Shared Photos"
     titles = [child.title for child in root.children]
-    assert titles == ["Shared Library", "Personal Library", "iCloud Favorites"]
+    assert titles == [
+        "Shared Library",
+        "Personal Library",
+        "Shared Albums",
+        "iCloud Favorites",
+    ]
 
     shared = await media_source.async_browse_media(
         hass, root.children[0].media_content_id
@@ -108,7 +113,7 @@ async def test_all_favorites(hass: HomeAssistant, setup: MockConfigEntry) -> Non
     """iCloud Favorites → All Favorites merges both libraries."""
     root = await media_source.async_browse_media(hass, f"media-source://{DOMAIN}")
     favs = await media_source.async_browse_media(
-        hass, root.children[2].media_content_id
+        hass, root.children[3].media_content_id
     )
     assert [c.title for c in favs.children] == [
         "Personal Favorites",
@@ -218,4 +223,86 @@ async def test_browse_errors(
     with pytest.raises(BrowseError):
         await media_source.async_browse_media(
             hass, f"media-source://{DOMAIN}/{entry_id}"
+        )
+
+
+async def test_shared_albums_browse(
+    hass: HomeAssistant, setup: MockConfigEntry
+) -> None:
+    """Media → iCloud Shared Photos → Shared Albums → album → photos."""
+    root = await media_source.async_browse_media(hass, f"media-source://{DOMAIN}")
+    albums = await media_source.async_browse_media(
+        hass, root.children[2].media_content_id
+    )
+    assert [c.title for c in albums.children] == ["Bilderrahmen"]
+    album = await media_source.async_browse_media(
+        hass, albums.children[0].media_content_id
+    )
+    assert album.title.endswith("Shared Albums / Bilderrahmen")
+    assert [c.title for c in album.children] == [
+        "IMG_0356.HEIC",
+        "Ferien Übersicht.JPG",
+    ]
+    resolved = await media_source.async_resolve_media(
+        hass, album.children[0].media_content_id, None
+    )
+    assert resolved.mime_type == "image/jpeg"
+
+
+async def test_get_album_photos_service(
+    hass: HomeAssistant, setup: MockConfigEntry, hass_client_no_auth, aioclient_mock
+) -> None:
+    """The service returns signed URLs that serve JPEG without login."""
+    from homeassistant.core_config import async_process_ha_core_config
+    from homeassistant.exceptions import ServiceValidationError
+
+    await async_process_ha_core_config(
+        hass, {"internal_url": "http://192.168.1.10:8123"}
+    )
+    response = await hass.services.async_call(
+        DOMAIN,
+        "get_album_photos",
+        {"album": "bilderrahmen"},
+        blocking=True,
+        return_response=True,
+    )
+    assert response["album"] == "Bilderrahmen"
+    assert response["account"] == "me@example.com"
+    assert response["count"] == 2
+    first, second = response["photos"]
+    assert first["filename"] == "IMG_0356.HEIC"
+    assert first["device_filename"].startswith("IMG_0356_")
+    assert first["device_filename"].endswith(".jpg")
+    assert second["device_filename"].startswith("Ferien_Ubersicht_")
+    assert first["date"].startswith("2024-07-03")
+    assert first["url"].startswith(
+        "http://192.168.1.10:8123/api/icloud_shared_photos/serve/full/"
+    )
+    assert "authSig=" in first["url"]
+
+    aioclient_mock.get("https://cdn.example/A1/med", content=b"JPEG-A1")
+    client = await hass_client_no_auth()
+    resp = await client.get(first["url"].removeprefix("http://192.168.1.10:8123"))
+    assert resp.status == 200
+    assert await resp.read() == b"JPEG-A1"
+    assert resp.headers["Content-Type"] == "image/jpeg"
+    # without signature the view requires authentication
+    unsigned = first["url"].split("?")[0].removeprefix("http://192.168.1.10:8123")
+    assert (await client.get(unsigned)).status == 401
+
+    with pytest.raises(ServiceValidationError, match="available: Bilderrahmen"):
+        await hass.services.async_call(
+            DOMAIN,
+            "get_album_photos",
+            {"album": "Ferien"},
+            blocking=True,
+            return_response=True,
+        )
+    with pytest.raises(ServiceValidationError, match="No loaded Apple iCloud"):
+        await hass.services.async_call(
+            DOMAIN,
+            "get_album_photos",
+            {"album": "Bilderrahmen", "account": "other@example.com"},
+            blocking=True,
+            return_response=True,
         )

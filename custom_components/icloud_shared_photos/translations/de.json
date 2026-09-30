@@ -38,5 +38,25 @@
         "medium": "Mittlere JPEG-Ableitung"
       }
     }
+  },
+  "services": {
+    "get_album_photos": {
+      "name": "Fotos eines geteilten Albums abrufen",
+      "description": "Listet die Fotos eines geteilten iCloud-Albums mit signierten, zeitlich begrenzten URLs (HEIC wird als JPEG ausgeliefert). Die Antwort kann z. B. an einen BLOOMIN8-Rahmen weitergegeben werden.",
+      "fields": {
+        "album": {
+          "name": "Album",
+          "description": "Name (oder ID) des geteilten Albums."
+        },
+        "account": {
+          "name": "Konto",
+          "description": "Apple-ID (Titel des iCloud-Integrationseintrags). Standard: alle Konten."
+        },
+        "expires": {
+          "name": "Gültigkeit der URLs",
+          "description": "Wie lange die zurückgegebenen URLs gültig sind."
+        }
+      }
+    }
   }
 }

@@ -23,6 +23,7 @@ def _photo(
         "recordType": "CPLMaster",
         "fields": {
             "filenameEnc": {"value": base64.b64encode(filename.encode()).decode()},
+            "originalCreationDate": {"value": date_ms},
             "itemType": {"value": uti},
             "resOriginalRes": {
                 "value": {"downloadURL": f"https://cdn.example/{rec}/orig", "size": 10}
@@ -30,11 +31,11 @@ def _photo(
             "resOriginalFileType": {"value": uti},
             "resOriginalFingerprint": {"value": fingerprint},
             "resJPEGMedRes": {
-                "value": {"downloadURL": f"https://cdn.example/{rec}/med"}
+                "value": {"downloadURL": f"https://cdn.example/{rec}/med", "size": 5}
             },
             "resJPEGMedFileType": {"value": "public.jpeg"},
             "resJPEGThumbRes": {
-                "value": {"downloadURL": f"https://cdn.example/{rec}/thumb"}
+                "value": {"downloadURL": f"https://cdn.example/{rec}/thumb", "size": 1}
             },
             "resJPEGThumbFileType": {"value": "public.jpeg"},
         },
@@ -72,6 +73,28 @@ DATA: dict[str, dict[str, list[dict[str, Any]]]] = {
 }
 
 
+SHARED_ALBUM_GUID = "5FD857E3-B35A-4442-93BD-001C8A1A9928"
+SHARED_ALBUM_RECORDS = _photo(
+    "A1", "IMG_0356.HEIC", 1_720_000_000_000, "fp-a1"
+) + _photo("A2", "Ferien Übersicht.JPG", 1_730_000_000_000, "fp-a2", "public.jpeg")
+SHARED_ALBUMS = [
+    {
+        "albumguid": SHARED_ALBUM_GUID,
+        "albumlocation": "https://streams.example/album/",
+        "albumctag": "ctag",
+        "ownerdsid": "123",
+        "sharingtype": "owned",
+        "iswebuploadsupported": False,
+        "attributes": {
+            "name": "Bilderrahmen",
+            "creationDate": "1700000000000",
+            "allowcontributions": False,
+            "ispublic": False,
+        },
+    }
+]
+
+
 def _json_response(data: dict[str, Any]) -> MagicMock:
     response = MagicMock()
     response.json.return_value = data
@@ -79,6 +102,14 @@ def _json_response(data: dict[str, Any]) -> MagicMock:
 
 
 def _fake_post(url: str, json: dict[str, Any] | None = None, **_: Any) -> MagicMock:
+    if "webgetalbumslist" in url:
+        return _json_response({"albums": SHARED_ALBUMS})
+    if "webgetassetcount" in url:
+        return _json_response({"albumassetcount": len(SHARED_ALBUM_RECORDS) // 2})
+    if "webgetassets" in url:
+        assert json is not None and json["albumguid"] == SHARED_ALBUM_GUID
+        offset = int(json["offset"])
+        return _json_response({"records": SHARED_ALBUM_RECORDS if offset == 0 else []})
     if "zones/list" in url:
         return _json_response(
             {

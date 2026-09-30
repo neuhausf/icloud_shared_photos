@@ -9,6 +9,8 @@ delegated to pyicloud (``PhotosService.libraries`` / ``PhotoLibrary.albums`` /
 ``PhotoAlbum.photos``). This module only adds:
 
 * selection of the Shared Library (``SharedSync-*``) zones,
+* access to legacy Shared Albums (photo streams) under the pseudo zone
+  ``SharedAlbums``, with the album GUID as album name,
 * in-RAM caching of album listings and resolved assets,
 * merging of personal and shared favorites without duplicates.
 """
@@ -23,6 +25,7 @@ from itertools import islice
 import logging
 import threading
 import time
+from types import SimpleNamespace
 from typing import Any
 
 from .const import (
@@ -33,6 +36,7 @@ from .const import (
     FAVORITES_SHARED,
     MAX_ASSET_CACHE_SIZE,
     PRIMARY_ZONE_NAME,
+    SHARED_ALBUMS_ZONE,
     SHARED_LIBRARY_ZONE_PREFIX,
     SUPPORTED_ALBUMS,
 )
@@ -91,6 +95,15 @@ class LibraryInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class SharedAlbumInfo:
+    """A legacy Shared Album (photo stream)."""
+
+    album_id: str
+    title: str
+    album: Any = field(compare=False, repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class PhotoRef:
     """A photo together with the library/album it was listed from."""
 
@@ -107,6 +120,30 @@ class PhotoRef:
 def is_shared_library_zone(zone_name: str | None) -> bool:
     """Return True for a Shared Photo Library zone (``SharedSync-<UUID>``)."""
     return bool(zone_name) and str(zone_name).startswith(SHARED_LIBRARY_ZONE_PREFIX)
+
+
+def photo_resources(photo: Any) -> dict[str, Any]:
+    """Return the downloadable resources of an asset, keyed by version.
+
+    CloudKit assets expose ``resources`` (objects with ``url``/``type``/
+    ``filename``/``checksum``). Shared Album assets come from pyicloud's legacy
+    implementation, which only has ``versions`` dicts; those are adapted to the
+    same attribute interface.
+    """
+    try:
+        return dict(photo.resources)
+    except AttributeError:
+        pass
+    versions: dict[str, dict[str, Any]] = photo.versions
+    return {
+        key: SimpleNamespace(
+            url=value.get("url"),
+            type=value.get("type"),
+            filename=value.get("filename"),
+            checksum=None,
+        )
+        for key, value in versions.items()
+    }
 
 
 def asset_date(photo: Any) -> datetime:
@@ -128,7 +165,7 @@ def asset_fingerprint(photo: Any) -> str | None:
     "All Favorites".
     """
     try:
-        resource = photo.resources.get("original")
+        resource = photo_resources(photo).get("original")
     except Exception:  # noqa: BLE001
         return None
     checksum = getattr(resource, "checksum", None) if resource is not None else None
@@ -156,6 +193,7 @@ class AccountPhotos:
         self._lock = threading.RLock()
         self._service: Any = None
         self._libraries: dict[str, LibraryInfo] | None = None
+        self._shared_albums: tuple[float, dict[str, SharedAlbumInfo]] | None = None
         self._listings: dict[tuple[Any, ...], tuple[float, list[PhotoRef]]] = {}
         self._assets: OrderedDict[tuple[str, str], tuple[float, Any]] = OrderedDict()
 
@@ -203,6 +241,7 @@ class AccountPhotos:
                     )
                 self._service = service
                 self._libraries = None
+                self._shared_albums = None
                 self._listings.clear()
                 self._assets.clear()
         return service
@@ -283,7 +322,67 @@ class AccountPhotos:
         """Return the zone names of all Shared Photo Libraries."""
         return [info.zone for info in self.libraries(api).values() if info.shared]
 
+    def shared_albums(self, api: Any, *, ttl: float) -> dict[str, SharedAlbumInfo]:
+        """Return the legacy Shared Albums (photo streams), keyed by album id."""
+        service = self._photos_service(api)
+        now = time.monotonic()
+        with self._lock:
+            cached = self._shared_albums
+            if cached is not None and now - cached[0] < ttl:
+                return cached[1]
+        # pyicloud caches the shared album list (and each album's change tag)
+        # for the lifetime of the PhotosService, so albums shared after Home
+        # Assistant started would never show up. Drop that cache on refresh.
+        shared_library = getattr(service, "_shared_library", None)
+        if shared_library is not None and hasattr(shared_library, "_albums"):
+            shared_library._albums = None
+        try:
+            result = {
+                str(album.id): SharedAlbumInfo(
+                    album_id=str(album.id), title=str(album.title), album=album
+                )
+                for album in service.shared_streams
+            }
+        except ICLOUD_ERRORS as err:
+            _LOGGER.error(
+                "Listing shared albums for '%s' failed: %s (%s)",
+                self._name,
+                type(err).__name__,
+                err,
+            )
+            raise PhotosUnavailableError(f"Cannot list shared albums: {err}") from err
+        _LOGGER.debug("Found %d shared album(s) for '%s'", len(result), self._name)
+        with self._lock:
+            self._shared_albums = (time.monotonic(), result)
+        return result
+
+    def find_shared_album(
+        self, api: Any, name_or_id: str, *, ttl: float
+    ) -> SharedAlbumInfo:
+        """Return a Shared Album by id or (case-insensitive) title."""
+        wanted = name_or_id.strip().casefold()
+        for refresh_ttl in (ttl, 0):
+            albums = self.shared_albums(api, ttl=refresh_ttl)
+            if (info := albums.get(name_or_id)) is not None:
+                return info
+            for info in albums.values():
+                if info.title.strip().casefold() == wanted:
+                    return info
+        raise PhotoNotFoundError(
+            f"Shared album '{name_or_id}' not found; available: "
+            + (", ".join(sorted(info.title for info in albums.values())) or "none")
+        )
+
     def _album(self, api: Any, zone: str, album_name: str) -> Any:
+        if zone == SHARED_ALBUMS_ZONE:
+            albums = self.shared_albums(api, ttl=ASSET_URL_TTL)
+            if (info := albums.get(album_name)) is None:
+                # The cached list may predate a newly shared album.
+                albums = self.shared_albums(api, ttl=0)
+                info = albums.get(album_name)
+            if info is None:
+                raise PhotoNotFoundError(f"Shared album '{album_name}' not found")
+            return info.album
         if album_name not in SUPPORTED_ALBUMS:
             raise PhotoNotFoundError(f"Unsupported album '{album_name}'")
         info = self.libraries(api).get(zone)
@@ -366,10 +465,10 @@ class AccountPhotos:
 
         _LOGGER.log(
             logging.INFO if album_name == ALBUM_FAVORITES else logging.DEBUG,
-            "Loaded %d item(s) from %s library %s/%s for '%s' in %.1fs "
+            "Loaded %d item(s) from %s %s/%s for '%s' in %.1fs "
             "(%d video(s) skipped, limit %d)",
             len(refs),
-            "shared" if is_shared_library_zone(zone) else "personal",
+            _zone_label(zone),
             zone,
             album_name,
             self._name,
@@ -486,6 +585,7 @@ class AccountPhotos:
         """Drop all cached listings and assets."""
         with self._lock:
             self._libraries = None
+            self._shared_albums = None
             self._listings.clear()
             self._assets.clear()
 
@@ -514,3 +614,11 @@ def merge_favorites(lists: Iterable[list[PhotoRef]]) -> list[PhotoRef]:
             seen_fingerprints.add(fingerprint)
         merged.append(ref)
     return merged
+
+
+def _zone_label(zone: str) -> str:
+    if zone == SHARED_ALBUMS_ZONE:
+        return "shared album"
+    if is_shared_library_zone(zone):
+        return "shared library"
+    return "personal library"

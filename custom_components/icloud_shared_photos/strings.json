@@ -38,5 +38,25 @@
         "medium": "Medium JPEG derivative"
       }
     }
+  },
+  "services": {
+    "get_album_photos": {
+      "name": "Get shared album photos",
+      "description": "Lists the photos of an iCloud Shared Album with signed, time-limited URLs (HEIC is delivered as JPEG). Use the response to push photos to a display, e.g. a BLOOMIN8 frame.",
+      "fields": {
+        "album": {
+          "name": "Album",
+          "description": "Name (or id) of the Shared Album."
+        },
+        "account": {
+          "name": "Account",
+          "description": "Apple ID (title of the iCloud integration entry). Defaults to all accounts."
+        },
+        "expires": {
+          "name": "URL lifetime",
+          "description": "How long the returned URLs stay valid."
+        }
+      }
+    }
   }
 }

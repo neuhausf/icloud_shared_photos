@@ -43,12 +43,22 @@ SHARED_LIBRARY_ZONE_PREFIX: Final = "SharedSync-"
 ALBUM_LIBRARY: Final = "Library"
 ALBUM_FAVORITES: Final = "Favorites"
 SUPPORTED_ALBUMS: Final = (ALBUM_LIBRARY, ALBUM_FAVORITES)
+# Pseudo zone for legacy Shared Albums (photo streams). Their "album" is the
+# album GUID. Never a real CloudKit zone name.
+SHARED_ALBUMS_ZONE: Final = "SharedAlbums"
 
 # Favorites collections
 FAVORITES_PERSONAL: Final = "personal"
 FAVORITES_SHARED: Final = "shared"
 FAVORITES_ALL: Final = "all"
 FAVORITES_COLLECTIONS: Final = (FAVORITES_PERSONAL, FAVORITES_SHARED, FAVORITES_ALL)
+
+# Services
+SERVICE_GET_ALBUM_PHOTOS: Final = "get_album_photos"
+ATTR_ALBUM: Final = "album"
+ATTR_ACCOUNT: Final = "account"
+ATTR_EXPIRES: Final = "expires"
+DEFAULT_URL_EXPIRES: Final = 3600  # seconds
 
 SERVE_URL: Final = "/api/icloud_shared_photos/serve/{version}/{token}"
 SERVE_URL_PREFIX: Final = "/api/icloud_shared_photos/serve"

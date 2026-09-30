@@ -1,4 +1,4 @@
-"""Media source exposing the iCloud Shared Photo Library and favorites."""
+"""Media source exposing the iCloud Shared Photo Library, Shared Albums and favorites."""
 
 from __future__ import annotations
 
@@ -45,6 +45,7 @@ from .const import (
     MEDIA_SOURCE_TITLE,
     PRIMARY_ZONE_NAME,
     SERVE_URL,
+    SHARED_ALBUMS_ZONE,
 )
 from .identifier import (
     VIEW_FAVORITES,
@@ -57,7 +58,9 @@ from .library import (
     PhotoNotFoundError,
     PhotoRef,
     PhotosUnavailableError,
+    SharedAlbumInfo,
     item_type,
+    photo_resources,
 )
 
 if TYPE_CHECKING:
@@ -181,7 +184,7 @@ def _decode_token(token: str) -> PhotosIdentifier:
 def _pick_version(photo: Any, preference: str, *, thumbnail: bool) -> str | None:
     """Return the pyicloud resource key that should be served."""
     try:
-        resources: dict[str, Any] = photo.resources
+        resources: dict[str, Any] = photo_resources(photo)
     except Exception:  # noqa: BLE001
         _LOGGER.warning("Asset %s has no readable resources", getattr(photo, "id", "?"))
         return None
@@ -217,7 +220,7 @@ def _pick_version(photo: Any, preference: str, *, thumbnail: bool) -> str | None
 
 
 def _mime_type(photo: Any, version: str | None) -> str:
-    resource = photo.resources.get(version) if version else None
+    resource = photo_resources(photo).get(version) if version else None
     if resource is not None:
         if (
             mime := _UTI_MIME_TYPES.get(getattr(resource, "type", None) or "")
@@ -409,6 +412,14 @@ class IcloudSharedPhotosMediaSource(MediaSource):
             )
         children.append(
             self._directory(
+                PhotosIdentifier(
+                    entry_id=entry_id, view=VIEW_LIBRARY, zone=SHARED_ALBUMS_ZONE
+                ),
+                "Shared Albums",
+            )
+        )
+        children.append(
+            self._directory(
                 PhotosIdentifier(entry_id=entry_id, view=VIEW_FAVORITES),
                 "iCloud Favorites",
             )
@@ -420,6 +431,28 @@ class IcloudSharedPhotosMediaSource(MediaSource):
     async def _browse_library(self, identifier: PhotosIdentifier) -> BrowseMediaSource:
         entry = _icloud_entry(self.hass, identifier.entry_id)
         account = _account_cache(self.hass, entry)
+        if identifier.zone == SHARED_ALBUMS_ZONE:
+            albums: dict[str, SharedAlbumInfo] = await self._run(
+                account.shared_albums,
+                _icloud_api(entry),
+                ttl=_options(self.hass)[CONF_CACHE_TTL],
+            )
+            return self._directory(
+                identifier,
+                f"{MEDIA_SOURCE_TITLE} / Shared Albums",
+                [
+                    self._directory(
+                        PhotosIdentifier(
+                            entry_id=identifier.entry_id,
+                            view=VIEW_LIBRARY,
+                            zone=SHARED_ALBUMS_ZONE,
+                            album=info.album_id,
+                        ),
+                        info.title,
+                    )
+                    for info in albums.values()
+                ],
+            )
         libraries = await self._run(account.libraries, _icloud_api(entry))
         if (info := libraries.get(identifier.zone or "")) is None:
             raise BrowseError(f"Photo library '{identifier.zone}' not found")
@@ -472,15 +505,20 @@ class IcloudSharedPhotosMediaSource(MediaSource):
             include_videos=options[CONF_INCLUDE_VIDEOS],
             ttl=options[CONF_CACHE_TTL],
         )
-        library_title = (
-            "Personal Library"
-            if identifier.zone == PRIMARY_ZONE_NAME
-            else "Shared Library"
-        )
+        if identifier.zone == SHARED_ALBUMS_ZONE:
+            albums: dict[str, SharedAlbumInfo] = await self._run(
+                account.shared_albums,
+                _icloud_api(entry),
+                ttl=options[CONF_CACHE_TTL],
+            )
+            info = albums.get(identifier.album)
+            path = f"Shared Albums / {info.title if info else identifier.album}"
+        elif identifier.zone == PRIMARY_ZONE_NAME:
+            path = f"Personal Library / {identifier.album}"
+        else:
+            path = f"Shared Library / {identifier.album}"
         return self._photos_directory(
-            identifier,
-            f"{MEDIA_SOURCE_TITLE} / {library_title} / {identifier.album}",
-            refs,
+            identifier, f"{MEDIA_SOURCE_TITLE} / {path}", refs
         )
 
     async def _browse_favorites(
@@ -599,7 +637,9 @@ class IcloudSharedPhotosView(HomeAssistantView):
                 raise web.HTTPServiceUnavailable from err
 
             resource_key = _pick_version(photo, preference, thumbnail=thumbnail)
-            resource = photo.resources.get(resource_key) if resource_key else None
+            resource = (
+                photo_resources(photo).get(resource_key) if resource_key else None
+            )
             url = getattr(resource, "url", None)
             if not url:
                 _LOGGER.warning(

@@ -2,7 +2,7 @@
 
 [![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz/docs/faq/custom_repositories)
 
-This custom integration adds the **iCloud Shared Photo Library** (*Geteilte Mediathek*) and your **favorites** to the Home Assistant media browser. It uses the existing, already authenticated **Apple iCloud** core integration. You don't enter a second Apple ID and don't go through a second 2FA login.
+This custom integration adds the **iCloud Shared Photo Library** (*Geteilte Mediathek*), your **Shared Albums** (*Geteilte Alben*) and your **favorites** to the Home Assistant media browser. It uses the existing, already authenticated **Apple iCloud** core integration. You don't enter a second Apple ID and don't go through a second 2FA login.
 
 > The rest of this README is in German.
 
@@ -15,6 +15,8 @@ Medien
     ├── Personal Library        (PrimarySync)
     │   ├── Library
     │   └── Favorites
+    ├── Shared Albums           (geteilte Alben / Photo Streams)
+    │   └── <Albumname> …
     └── iCloud Favorites
         ├── Personal Favorites
         ├── Shared Favorites
@@ -191,9 +193,115 @@ pytest -q
 
 ---
 
-## 8. Späterer BLOOMIN8-Datenfluss
+## 8. Fotos an einen BLOOMIN8-Rahmen schicken
 
-Die Integration steuert bewusst **keinen** Fotorahmen an. Sie liefert Media-Source-IDs, die jede HA-Komponente auflösen kann, z. B. über `media_source.async_resolve_media()` oder `media_player.play_media` mit `media_content_id: media-source://icloud_shared_photos/...`. HA erzeugt daraus eine signierte, zeitlich begrenzte URL auf `/api/icloud_shared_photos/serve/full/...`, die ohne Login abrufbar ist. Mit der Standardoption erhält der Rahmen dort ein JPEG.
+Die Integration steuert selbst **keinen** Fotorahmen an. Sie liefert aber signierte, zeitlich begrenzte URLs, die jede andere Integration ohne Login abrufen kann. Mit der Standardoption „Automatisch“ kommen HEIC-Fotos dabei als JPEG an (die BLOOMIN8-Integration kann kein HEIC lesen).
+
+### Dienst `icloud_shared_photos.get_album_photos`
+
+| Feld | Pflicht | Bedeutung |
+|---|---|---|
+| `album` | ja | Name (Groß-/Kleinschreibung egal) oder ID eines **geteilten Albums** |
+| `account` | nein | Apple-ID bzw. Titel des iCloud-Eintrags. Standard: alle Konten, das erste mit passendem Album gewinnt |
+| `expires` | nein | Gültigkeit der URLs in Sekunden (Standard 3600) |
+
+Antwort (nur als `response_variable` nutzbar):
+
+```yaml
+account: me@icloud.com
+album: Bilderrahmen
+album_id: 5FD857E3-…
+count: 2
+photos:
+  - id: …
+    filename: IMG_0356.HEIC
+    device_filename: IMG_0356_1a2b3c4d.jpg   # stabil, ASCII, eindeutig
+    date: "2024-07-03T09:20:00+00:00"
+    media_content_id: media-source://icloud_shared_photos/…
+    url: http://192.168.1.10:8123/api/icloud_shared_photos/serve/full/…?authSig=…
+```
+
+Die URLs basieren auf der **internen URL** von Home Assistant (*Einstellungen → System → Netzwerk*). Sie verlieren ihre Gültigkeit nach `expires` Sekunden oder beim Neustart von HA.
+
+### Beispiel: geteiltes Album → BLOOMIN8-Playlist
+
+Die Automation lädt nur neue Fotos hoch, löscht aus dem Album entfernte Fotos vom Rahmen und schreibt die Playlist neu, wenn sich etwas geändert hat.
+
+```yaml
+alias: Bilderrahmen – Playlist „Ferien“ aus geteiltem iCloud-Album
+mode: single
+triggers:
+  - trigger: time
+    at: "06:10:00"
+  - trigger: state
+    entity_id: sensor.bilderrahmen_device_info
+    to: Online
+actions:
+  - variables:
+      album: Bilderrahmen
+      gallery: ferien
+      playlist: Ferien
+      duration: 14400   # Sekunden pro Bild
+  - action: icloud_shared_photos.get_album_photos
+    data:
+      album: "{{ album }}"
+    response_variable: icloud
+  - action: bloomin8_eink_canvas.get_playlist
+    target:
+      entity_id: media_player.bilderrahmen_media_player
+    data:
+      name: "{{ playlist }}"
+    response_variable: current
+  - variables:
+      existing: >-
+        {% set pl = current.playlist if current.playlist is mapping else {} %}
+        {{ pl.get('list', []) | map(attribute='name') | map('regex_replace', '^.*/', '') | list }}
+      wanted: "{{ icloud.photos | map(attribute='device_filename') | list }}"
+      uploads: >-
+        {% set ns = namespace(items=[]) %}
+        {% for p in icloud.photos if p.device_filename not in existing %}
+          {% set ns.items = ns.items + [{'url': p.url, 'filename': p.device_filename}] %}
+        {% endfor %}
+        {{ ns.items }}
+      removed: "{{ existing | reject('in', wanted) | list }}"
+  - repeat:
+      for_each: "{{ uploads | batch(5) | list }}"
+      sequence:
+        - action: bloomin8_eink_canvas.upload_images_multi
+          target:
+            entity_id: media_player.bilderrahmen_media_player
+          data:
+            gallery: "{{ gallery }}"
+            images: "{{ repeat.item }}"
+            override: true
+  - repeat:
+      for_each: "{{ removed }}"
+      sequence:
+        - action: bloomin8_eink_canvas.delete_image
+          target:
+            entity_id: media_player.bilderrahmen_media_player
+          data:
+            gallery: "{{ gallery }}"
+            filename: "{{ repeat.item }}"
+  - if:
+      - condition: template
+        value_template: "{{ uploads | count > 0 or removed | count > 0 }}"
+    then:
+      - action: bloomin8_eink_canvas.put_playlist
+        target:
+          entity_id: media_player.bilderrahmen_media_player
+        data:
+          name: "{{ playlist }}"
+          type: duration
+          items: >-
+            {% set ns = namespace(items=[]) %}
+            {% for f in wanted %}
+              {% set ns.items = ns.items + [{'name': '/gallerys/' ~ gallery ~ '/' ~ f, 'duration': duration | int}] %}
+            {% endfor %}
+            {{ ns.items }}
+```
+
+Alternativ lässt sich jedes Foto auch über `media_content_id` mit `media_source.async_resolve_media()` oder `media_player.play_media` auflösen.
 
 ---
 
@@ -201,6 +309,7 @@ Die Integration steuert bewusst **keinen** Fotorahmen an. Sie liefert Media-Sour
 
 * **Kein offizieller Core-Vertrag:** `entry.runtime_data.api` ist ein internes Detail der Core-Integration `icloud`. Wird es in einer künftigen HA-Version umbenannt, zeigt der Browser einen verständlichen Fehler statt Fotos, und die Integration muss angepasst werden. Die Stelle ist in `media_source.py::_icloud_api` gekapselt.
 * **pyicloud-Umfang:** pyicloud unterstützt in Shared Libraries derzeit nur `Library` und `Favorites`. Benutzeralben innerhalb der geteilten Mediathek und gemischte Ansichten fehlen.
+* **Geteilte Alben** (Photo Streams) laufen über pyicloud's ältere Shared-Streams-API. Einzelne Fotos werden dort durch Blättern im Album gesucht; bei sehr großen geteilten Alben ist der erste Abruf nach Ablauf des Caches daher langsamer.
 * **Große Mediatheken:** `Library` kann zehntausende Einträge haben. Daher gibt es das Limit „Maximale Anzahl Fotos pro Album“. `Library` wird von neu nach alt gelistet. Persönliche Favoriten liefert iCloud von alt nach neu: Hat man mehr Favoriten als das Limit, fehlen die neuesten. In dem Fall das Limit erhöhen.
 * **Signierte Download-URLs laufen ab.** Deshalb gibt es die 30-Minuten-TTL und den automatischen Retry. Eine kurze Verzögerung beim ersten Abruf nach längerer Zeit ist normal.
 * **Advanced Data Protection (ADP):** Mit aktivem ADP ist der Webzugriff auf iCloud-Fotos nur eingeschränkt oder gar nicht möglich. Das betrifft die Core-Integration genauso.
