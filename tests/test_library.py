@@ -19,7 +19,13 @@ from isp.library import (
     merge_favorites,
 )
 
-from .fake_icloud import PRIMARY_ZONE_NAME, SHARED_ZONE, _fake_post, _json_response
+from .fake_icloud import (
+    COLLECTION_ZONE,
+    PRIMARY_ZONE_NAME,
+    SHARED_ZONE,
+    _fake_post,
+    _json_response,
+)
 
 pyicloud_photos = pytest.importorskip("pyicloud.services.photos")
 
@@ -46,8 +52,10 @@ def api() -> MagicMock:
 def test_discovers_shared_library_zone(api: MagicMock) -> None:
     """PrimarySync and SharedSync-* are found; other zones/streams are ignored."""
     libraries = AccountPhotos("test").libraries(api)
-    assert set(libraries) == {PRIMARY_ZONE_NAME, SHARED_ZONE}
+    assert set(libraries) == {PRIMARY_ZONE_NAME, SHARED_ZONE, COLLECTION_ZONE}
     assert libraries[SHARED_ZONE].shared
+    assert libraries[COLLECTION_ZONE].collection
+    assert not libraries[COLLECTION_ZONE].shared
     assert not libraries[PRIMARY_ZONE_NAME].shared
     assert libraries[SHARED_ZONE].library.zone_id["zoneName"] == SHARED_ZONE
 
@@ -202,14 +210,14 @@ def test_shared_albums(api: MagicMock) -> None:
 
     account = AccountPhotos("test")
     albums = account.shared_albums(api, ttl=60)
-    assert [info.title for info in albums.values()] == ["Bilderrahmen"]
+    assert [info.title for info in albums.values()] == ["Bilderrahmen", "Fotorahmen"]
     assert account.find_shared_album(api, "bilderrahmen ", ttl=60).album_id == (
         SHARED_ALBUM_GUID
     )
     assert account.find_shared_album(api, SHARED_ALBUM_GUID, ttl=60).title == (
         "Bilderrahmen"
     )
-    with pytest.raises(PhotoNotFoundError, match="available: Bilderrahmen"):
+    with pytest.raises(PhotoNotFoundError, match="available: Bilderrahmen, Fotorahmen"):
         account.find_shared_album(api, "Ferien", ttl=60)
 
     refs = account.list_album(
@@ -241,7 +249,8 @@ def test_new_shared_album_is_found(api: MagicMock) -> None:
 
     account = AccountPhotos("test")
     assert [i.title for i in account.shared_albums(api, ttl=3600).values()] == [
-        "Bilderrahmen"
+        "Bilderrahmen",
+        "Fotorahmen",
     ]
     new_album = {
         **fake_icloud.SHARED_ALBUMS[0],
@@ -258,3 +267,88 @@ def test_new_shared_album_is_found(api: MagicMock) -> None:
         )
     finally:
         fake_icloud.SHARED_ALBUMS.remove(new_album)
+
+
+def test_cloudkit_shared_album(api: MagicMock) -> None:
+    """A SharedCollection zone is a Shared Album titled by its album record."""
+    account = AccountPhotos("test")
+    info = account.find_shared_album(api, "fotorahmen", ttl=60)
+    assert info.album_id == COLLECTION_ZONE
+    assert info.zone == COLLECTION_ZONE
+    assert info.source_album == "Library"
+    refs = account.list_album(
+        api,
+        info.zone,
+        info.source_album,
+        max_items=50,
+        include_videos=False,
+        ttl=60,
+    )
+    assert [ref.photo_id for ref in refs] == ["C1"]
+    assert account.find_shared_album(api, COLLECTION_ZONE, ttl=60).title == (
+        "Fotorahmen"
+    )
+
+
+def test_collection_title_fallback() -> None:
+    """Without exactly one album record the zone gives a placeholder title."""
+    from isp.library import LibraryInfo, _collection_title
+
+    library = MagicMock()
+    library.albums = []
+    info = LibraryInfo(
+        zone=COLLECTION_ZONE, shared=False, library=library, collection=True
+    )
+    assert _collection_title(info) == "Shared Album E78388A3"
+
+
+def test_inspect_collection_summarizes_records() -> None:
+    """The inspector reports types, field names and decoded titles only."""
+    import base64
+
+    from isp.library import LibraryInfo, _inspect_collection
+
+    library = MagicMock()
+    library.zone_id = {"zoneName": COLLECTION_ZONE}
+    library.scope = "private"
+    library._client._client._http.post.return_value = {
+        "zones": [
+            {
+                "moreComing": False,
+                "records": [
+                    {
+                        "recordType": "CPLAlbum",
+                        "fields": {
+                            "albumNameEnc": {
+                                "type": "ENCRYPTED_BYTES",
+                                "value": base64.b64encode(b"Fotorahmen").decode(),
+                            },
+                            "url": {
+                                "type": "STRING",
+                                "value": "https://cdn.example/secret",
+                            },
+                        },
+                    },
+                    {
+                        "recordType": "CPLMaster",
+                        "fields": {
+                            "filenameEnc": {"type": "STRING", "value": "SU1HLkhFSUM="}
+                        },
+                    },
+                ],
+            }
+        ]
+    }
+    account = MagicMock()
+    account.list_album.return_value = []
+    info = LibraryInfo(
+        zone=COLLECTION_ZONE, shared=False, library=library, collection=True
+    )
+    report = _inspect_collection(account, MagicMock(), info, 10)
+    assert report["record_types"] == {"CPLAlbum": 1, "CPLMaster": 1}
+    assert report["fields"]["CPLAlbum"] == {
+        "albumNameEnc": "ENCRYPTED_BYTES",
+        "url": "STRING",
+    }
+    assert report["text_values"] == {"CPLAlbum": {"albumNameEnc": ["Fotorahmen"]}}
+    assert report["library_items"] == 0

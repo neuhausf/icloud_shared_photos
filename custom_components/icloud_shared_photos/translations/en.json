@@ -57,6 +57,20 @@
           "description": "How long the returned URLs stay valid."
         }
       }
+    },
+    "inspect_zones": {
+      "name": "Inspect photo zones",
+      "description": "Diagnostics: lists the iCloud photo zones and describes the records of CloudKit Shared Album zones (record types, field names, album titles; no photo data or URLs).",
+      "fields": {
+        "account": {
+          "name": "Account",
+          "description": "Apple ID (title of the iCloud integration entry). Defaults to all accounts."
+        },
+        "limit": {
+          "name": "Record limit",
+          "description": "Maximum number of records read per zone."
+        }
+      }
     }
   }
 }

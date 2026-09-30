@@ -59,6 +59,7 @@ from .library import (
     PhotoRef,
     PhotosUnavailableError,
     SharedAlbumInfo,
+    is_shared_collection_zone,
     item_type,
     photo_resources,
 )
@@ -445,8 +446,8 @@ class IcloudSharedPhotosMediaSource(MediaSource):
                         PhotosIdentifier(
                             entry_id=identifier.entry_id,
                             view=VIEW_LIBRARY,
-                            zone=SHARED_ALBUMS_ZONE,
-                            album=info.album_id,
+                            zone=info.zone,
+                            album=info.source_album,
                         ),
                         info.title,
                     )
@@ -505,14 +506,21 @@ class IcloudSharedPhotosMediaSource(MediaSource):
             include_videos=options[CONF_INCLUDE_VIDEOS],
             ttl=options[CONF_CACHE_TTL],
         )
-        if identifier.zone == SHARED_ALBUMS_ZONE:
+        if identifier.zone == SHARED_ALBUMS_ZONE or is_shared_collection_zone(
+            identifier.zone
+        ):
             albums: dict[str, SharedAlbumInfo] = await self._run(
                 account.shared_albums,
                 _icloud_api(entry),
                 ttl=options[CONF_CACHE_TTL],
             )
-            info = albums.get(identifier.album)
-            path = f"Shared Albums / {info.title if info else identifier.album}"
+            album_id = (
+                identifier.album
+                if identifier.zone == SHARED_ALBUMS_ZONE
+                else identifier.zone
+            )
+            info = albums.get(album_id)
+            path = f"Shared Albums / {info.title if info else album_id}"
         elif identifier.zone == PRIMARY_ZONE_NAME:
             path = f"Personal Library / {identifier.album}"
         else:

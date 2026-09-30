@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 PRIMARY_ZONE_NAME = "PrimarySync"
 SHARED_ZONE = "SharedSync-11111111-2222-3333-4444-555555555555"
+COLLECTION_ZONE = "SharedCollection-E78388A3-AFFF-44A6-A264-31FEEB4A8B2E"
 
 
 def _photo(
@@ -58,6 +59,22 @@ DATA: dict[str, dict[str, list[dict[str, Any]]]] = {
             "P1", "personal.jpg", 1_600_000_000_000, "fp-p1", "public.jpeg"
         )
         + _photo("P2", "dup.heic", 1_650_000_000_000, "fp-dup"),
+    },
+    COLLECTION_ZONE: {
+        "CPLAssetAndMasterInSmartAlbumByAssetDate": [],
+        "CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted": _photo(
+            "C1", "IMG_1000.HEIC", 1_740_000_000_000, "fp-c1"
+        ),
+        "CPLAlbumByPositionLive": [
+            {
+                "recordName": "ALB-1",
+                "recordType": "CPLAlbum",
+                "fields": {
+                    "albumNameEnc": {"value": base64.b64encode(b"Fotorahmen").decode()},
+                    "albumType": {"value": 0},
+                },
+            }
+        ],
     },
     SHARED_ZONE: {
         "CPLAssetAndMasterInSmartAlbumByAssetDate": _photo(
@@ -122,6 +139,7 @@ def _fake_post(url: str, json: dict[str, Any] | None = None, **_: Any) -> MagicM
                         }
                     },
                     {"zoneID": {"zoneName": "SomeOtherZone"}},
+                    {"zoneID": {"zoneName": COLLECTION_ZONE}},
                 ]
             }
         )
