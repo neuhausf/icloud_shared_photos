@@ -233,3 +233,28 @@ def test_shared_albums(api: MagicMock) -> None:
     assert resources["original"].type == "public.heic"
     with pytest.raises(PhotoNotFoundError):
         account.get_photo(api, SHARED_ALBUMS_ZONE, "unknown-guid", "Z9")
+
+
+def test_new_shared_album_is_found(api: MagicMock) -> None:
+    """An album shared after the first listing is found without restart."""
+    from . import fake_icloud
+
+    account = AccountPhotos("test")
+    assert [i.title for i in account.shared_albums(api, ttl=3600).values()] == [
+        "Bilderrahmen"
+    ]
+    new_album = {
+        **fake_icloud.SHARED_ALBUMS[0],
+        "albumguid": "NEW-GUID",
+        "attributes": {
+            **fake_icloud.SHARED_ALBUMS[0]["attributes"],
+            "name": "Ferien 2026",
+        },
+    }
+    fake_icloud.SHARED_ALBUMS.append(new_album)
+    try:
+        assert account.find_shared_album(api, "Ferien 2026", ttl=3600).album_id == (
+            "NEW-GUID"
+        )
+    finally:
+        fake_icloud.SHARED_ALBUMS.remove(new_album)

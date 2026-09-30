@@ -330,6 +330,12 @@ class AccountPhotos:
             cached = self._shared_albums
             if cached is not None and now - cached[0] < ttl:
                 return cached[1]
+        # pyicloud caches the shared album list (and each album's change tag)
+        # for the lifetime of the PhotosService, so albums shared after Home
+        # Assistant started would never show up. Drop that cache on refresh.
+        shared_library = getattr(service, "_shared_library", None)
+        if shared_library is not None and hasattr(shared_library, "_albums"):
+            shared_library._albums = None
         try:
             result = {
                 str(album.id): SharedAlbumInfo(
@@ -354,13 +360,14 @@ class AccountPhotos:
         self, api: Any, name_or_id: str, *, ttl: float
     ) -> SharedAlbumInfo:
         """Return a Shared Album by id or (case-insensitive) title."""
-        albums = self.shared_albums(api, ttl=ttl)
-        if (info := albums.get(name_or_id)) is not None:
-            return info
         wanted = name_or_id.strip().casefold()
-        for info in albums.values():
-            if info.title.strip().casefold() == wanted:
+        for refresh_ttl in (ttl, 0):
+            albums = self.shared_albums(api, ttl=refresh_ttl)
+            if (info := albums.get(name_or_id)) is not None:
                 return info
+            for info in albums.values():
+                if info.title.strip().casefold() == wanted:
+                    return info
         raise PhotoNotFoundError(
             f"Shared album '{name_or_id}' not found; available: "
             + (", ".join(sorted(info.title for info in albums.values())) or "none")
