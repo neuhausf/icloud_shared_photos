@@ -18,3 +18,17 @@ get_album_photos:
           step: 60
           unit_of_measurement: s
           mode: box
+
+inspect_zones:
+  fields:
+    account:
+      example: "me@icloud.com"
+      selector:
+        text:
+    limit:
+      default: 200
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box

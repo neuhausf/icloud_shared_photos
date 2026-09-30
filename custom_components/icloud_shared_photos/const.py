@@ -46,6 +46,9 @@ SUPPORTED_ALBUMS: Final = (ALBUM_LIBRARY, ALBUM_FAVORITES)
 # Pseudo zone for legacy Shared Albums (photo streams). Their "album" is the
 # album GUID. Never a real CloudKit zone name.
 SHARED_ALBUMS_ZONE: Final = "SharedAlbums"
+# CloudKit zones of the newer, CloudKit based Shared Albums (icloud.com links
+# of the form ``sharedalbums/sc,…``). They hold a regular Photos library.
+SHARED_COLLECTION_ZONE_PREFIX: Final = "SharedCollection-"
 
 # Favorites collections
 FAVORITES_PERSONAL: Final = "personal"
@@ -55,6 +58,7 @@ FAVORITES_COLLECTIONS: Final = (FAVORITES_PERSONAL, FAVORITES_SHARED, FAVORITES_
 
 # Services
 SERVICE_GET_ALBUM_PHOTOS: Final = "get_album_photos"
+SERVICE_INSPECT_ZONES: Final = "inspect_zones"
 ATTR_ALBUM: Final = "album"
 ATTR_ACCOUNT: Final = "account"
 ATTR_EXPIRES: Final = "expires"

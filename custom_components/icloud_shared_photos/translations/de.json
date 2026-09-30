@@ -57,6 +57,20 @@
           "description": "Wie lange die zurückgegebenen URLs gültig sind."
         }
       }
+    },
+    "inspect_zones": {
+      "name": "Foto-Zonen untersuchen",
+      "description": "Diagnose: listet die iCloud-Foto-Zonen und beschreibt die Datensätze von CloudKit-Zonen geteilter Alben (Datensatztypen, Feldnamen, Albumtitel; keine Fotodaten oder URLs).",
+      "fields": {
+        "account": {
+          "name": "Konto",
+          "description": "Apple-ID (Titel des iCloud-Integrationseintrags). Standard: alle Konten."
+        },
+        "limit": {
+          "name": "Maximale Datensätze",
+          "description": "Wie viele Datensätze pro Zone höchstens gelesen werden."
+        }
+      }
     }
   }
 }

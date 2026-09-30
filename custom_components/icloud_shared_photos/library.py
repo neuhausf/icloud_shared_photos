@@ -11,12 +11,16 @@ delegated to pyicloud (``PhotosService.libraries`` / ``PhotoLibrary.albums`` /
 * selection of the Shared Library (``SharedSync-*``) zones,
 * access to legacy Shared Albums (photo streams) under the pseudo zone
   ``SharedAlbums``, with the album GUID as album name,
+* access to the newer CloudKit Shared Albums (``SharedCollection-*`` zones),
+  whose photos are the ``Library`` smart album of their zone,
 * in-RAM caching of album listings and resolved assets,
 * merging of personal and shared favorites without duplicates.
 """
 
 from __future__ import annotations
 
+import base64
+import binascii
 from collections import OrderedDict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -30,6 +34,7 @@ from typing import Any
 
 from .const import (
     ALBUM_FAVORITES,
+    ALBUM_LIBRARY,
     ASSET_URL_TTL,
     FAVORITES_ALL,
     FAVORITES_PERSONAL,
@@ -37,6 +42,7 @@ from .const import (
     MAX_ASSET_CACHE_SIZE,
     PRIMARY_ZONE_NAME,
     SHARED_ALBUMS_ZONE,
+    SHARED_COLLECTION_ZONE_PREFIX,
     SHARED_LIBRARY_ZONE_PREFIX,
     SUPPORTED_ALBUMS,
 )
@@ -92,15 +98,28 @@ class LibraryInfo:
     zone: str
     shared: bool
     library: Any = field(compare=False, repr=False)
+    collection: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SharedAlbumInfo:
-    """A legacy Shared Album (photo stream)."""
+    """A Shared Album: a legacy photo stream or a CloudKit shared collection.
+
+    ``zone``/``source_album`` address its photos for ``list_album`` and
+    ``get_photo``: ``SharedAlbums``/<GUID> for photo streams and
+    ``SharedCollection-<UUID>``/``Library`` for CloudKit shared albums.
+    """
 
     album_id: str
     title: str
     album: Any = field(compare=False, repr=False)
+    zone: str = SHARED_ALBUMS_ZONE
+    source_album: str = ""
+
+    def __post_init__(self) -> None:
+        """Default the source album to the album id (photo streams)."""
+        if not self.source_album:
+            object.__setattr__(self, "source_album", self.album_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +139,17 @@ class PhotoRef:
 def is_shared_library_zone(zone_name: str | None) -> bool:
     """Return True for a Shared Photo Library zone (``SharedSync-<UUID>``)."""
     return bool(zone_name) and str(zone_name).startswith(SHARED_LIBRARY_ZONE_PREFIX)
+
+
+def is_shared_collection_zone(zone_name: str | None) -> bool:
+    """Return True for a CloudKit Shared Album zone (``SharedCollection-<UUID>``)."""
+    return bool(zone_name) and str(zone_name).startswith(SHARED_COLLECTION_ZONE_PREFIX)
+
+
+def collection_placeholder_title(zone_name: str) -> str:
+    """Return a readable fallback title for a CloudKit Shared Album zone."""
+    uuid = zone_name.removeprefix(SHARED_COLLECTION_ZONE_PREFIX)
+    return f"Shared Album {uuid[:8]}"
 
 
 def photo_resources(photo: Any) -> dict[str, Any]:
@@ -253,6 +283,10 @@ class AccountPhotos:
             if self._libraries is not None and not refresh:
                 return self._libraries
 
+        if refresh and hasattr(service, "_libraries"):
+            # pyicloud keeps the zone list for the lifetime of the service;
+            # drop it so newly shared albums/libraries are discovered.
+            service._libraries = None
         result: dict[str, LibraryInfo] = {}
         try:
             discovered: dict[str, Any] = dict(service.libraries)
@@ -282,6 +316,17 @@ class AccountPhotos:
                     zone=PRIMARY_ZONE_NAME, shared=False, library=library
                 )
                 _LOGGER.debug("Library '%s': personal library (PrimarySync)", key)
+            elif is_shared_collection_zone(zone):
+                assert zone is not None
+                result[zone] = LibraryInfo(
+                    zone=zone, shared=False, library=library, collection=True
+                )
+                _LOGGER.info(
+                    "Detected iCloud Shared Album zone %s (%s) for '%s'",
+                    zone,
+                    scope,
+                    self._name,
+                )
             elif scope == "shared-library" and is_shared_library_zone(zone):
                 assert zone is not None
                 result[zone] = LibraryInfo(zone=zone, shared=True, library=library)
@@ -304,8 +349,7 @@ class AccountPhotos:
             "iCloud photo libraries for '%s': %s",
             self._name,
             ", ".join(
-                f"{info.zone} ({'shared' if info.shared else 'personal'})"
-                for info in result.values()
+                f"{info.zone} ({_zone_label(info.zone)})" for info in result.values()
             )
             or "none",
         )
@@ -351,6 +395,15 @@ class AccountPhotos:
                 err,
             )
             raise PhotosUnavailableError(f"Cannot list shared albums: {err}") from err
+        for info in self.libraries(api, refresh=True).values():
+            if info.collection:
+                result[info.zone] = SharedAlbumInfo(
+                    album_id=info.zone,
+                    title=_collection_title(info),
+                    album=info.library,
+                    zone=info.zone,
+                    source_album=ALBUM_LIBRARY,
+                )
         _LOGGER.debug("Found %d shared album(s) for '%s'", len(result), self._name)
         with self._lock:
             self._shared_albums = (time.monotonic(), result)
@@ -581,6 +634,35 @@ class AccountPhotos:
             self._remember_asset(zone, photo, time.monotonic())
         return photo
 
+    def inspect_zones(self, api: Any, *, limit: int) -> dict[str, Any]:
+        """Describe all photo zones and the records of Shared Album zones.
+
+        Diagnostic helper to learn how iCloud stores CloudKit Shared Albums.
+        Only record types, field names/types and short text values of
+        non-photo records (where album titles live) are returned; never
+        download URLs or photo data.
+        """
+        service = self._photos_service(api)
+        libraries = self.libraries(api, refresh=True)
+        zones = []
+        for key, library in dict(service.libraries).items():
+            zone_id = getattr(library, "zone_id", None)
+            zones.append(
+                {
+                    "key": key,
+                    "zone": zone_id.get("zoneName")
+                    if isinstance(zone_id, dict)
+                    else None,
+                    "scope": getattr(library, "scope", None),
+                }
+            )
+        collections = [
+            _inspect_collection(self, api, info, limit)
+            for info in libraries.values()
+            if info.collection
+        ]
+        return {"zones": zones, "shared_album_zones": collections}
+
     def invalidate(self) -> None:
         """Drop all cached listings and assets."""
         with self._lock:
@@ -617,8 +699,120 @@ def merge_favorites(lists: Iterable[list[PhotoRef]]) -> list[PhotoRef]:
 
 
 def _zone_label(zone: str) -> str:
-    if zone == SHARED_ALBUMS_ZONE:
+    if zone == SHARED_ALBUMS_ZONE or is_shared_collection_zone(zone):
         return "shared album"
     if is_shared_library_zone(zone):
         return "shared library"
     return "personal library"
+
+
+_PHOTO_RECORD_TYPES = {"CPLMaster", "CPLAsset"}
+_MAX_TEXT_VALUES = 5
+_MAX_TEXT_LENGTH = 200
+
+
+def _text_value(value: Any) -> str | None:
+    """Return a short, human readable text for a CloudKit field value."""
+    if isinstance(value, str):
+        if value.startswith(("http://", "https://")):
+            return None
+        text = value
+        if len(value) % 4 == 0 and len(value) >= 4:
+            # ...Enc fields are base64 encoded UTF-8
+            try:
+                decoded = base64.b64decode(value, validate=True).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError):
+                decoded = None
+            if decoded and decoded.isprintable():
+                text = decoded
+        return text[:_MAX_TEXT_LENGTH] if text.isprintable() else None
+    return None
+
+
+def _inspect_collection(
+    account: AccountPhotos, api: Any, info: LibraryInfo, limit: int
+) -> dict[str, Any]:
+    library = info.library
+    report: dict[str, Any] = {
+        "zone": info.zone,
+        "zone_id": dict(getattr(library, "zone_id", {}) or {}),
+        "scope": getattr(library, "scope", None),
+    }
+    try:
+        http = library._client._client._http  # noqa: SLF001
+        data = http.post(
+            "/changes/zone",
+            {
+                "zones": [{"zoneID": report["zone_id"]}],
+                "resultsLimit": limit,
+            },
+        )
+    except Exception as err:  # noqa: BLE001 - diagnostic, report any failure
+        report["changes_error"] = f"{type(err).__name__}: {err}"
+        data = {}
+    zone_data = (data.get("zones") or [{}])[0] if isinstance(data, dict) else {}
+    records = zone_data.get("records") or []
+    record_types: dict[str, int] = {}
+    fields: dict[str, dict[str, str]] = {}
+    texts: dict[str, dict[str, list[str]]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        record_type = str(record.get("recordType", "?"))
+        record_types[record_type] = record_types.get(record_type, 0) + 1
+        type_fields = fields.setdefault(record_type, {})
+        for name, value in (record.get("fields") or {}).items():
+            if not isinstance(value, dict):
+                continue
+            type_fields.setdefault(name, str(value.get("type", "?")))
+            if record_type in _PHOTO_RECORD_TYPES:
+                continue
+            if (text := _text_value(value.get("value"))) is None:
+                continue
+            values = texts.setdefault(record_type, {}).setdefault(name, [])
+            if text not in values and len(values) < _MAX_TEXT_VALUES:
+                values.append(text)
+    report.update(
+        records_scanned=len(records),
+        more_coming=zone_data.get("moreComing"),
+        record_types=record_types,
+        fields=fields,
+        text_values=texts,
+    )
+    try:
+        refs = account.list_album(
+            api,
+            info.zone,
+            ALBUM_LIBRARY,
+            max_items=limit,
+            include_videos=True,
+            ttl=0,
+        )
+        report["library_items"] = len(refs)
+        report["library_filenames"] = [
+            str(getattr(ref.photo, "filename", "?")) for ref in refs[:10]
+        ]
+    except (PhotosUnavailableError, PhotoNotFoundError, *ICLOUD_ERRORS) as err:
+        report["library_error"] = f"{type(err).__name__}: {err}"
+    return report
+
+
+def _collection_title(info: LibraryInfo) -> str:
+    """Return the title of a CloudKit Shared Album zone.
+
+    If the zone holds exactly one regular album record, its name is the title
+    of the shared album; otherwise a placeholder derived from the zone is used.
+    """
+    try:
+        names = [
+            str(album.title)
+            for album in info.library.albums
+            if type(album).__name__ == "PhotoAlbum" and album.title
+        ]
+    except (*ICLOUD_ERRORS, AttributeError, KeyError, TypeError, ValueError) as err:
+        _LOGGER.debug("Cannot read album records of %s: %s", info.zone, err)
+        names = []
+    if len(names) == 1:
+        return names[0]
+    _LOGGER.debug("Album names in %s: %s", info.zone, names)
+    return collection_placeholder_title(info.zone)

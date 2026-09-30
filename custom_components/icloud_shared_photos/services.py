@@ -40,7 +40,7 @@ from .const import (
     DOMAIN,
     SERVE_URL,
     SERVICE_GET_ALBUM_PHOTOS,
-    SHARED_ALBUMS_ZONE,
+    SERVICE_INSPECT_ZONES,
 )
 from .identifier import VIEW_LIBRARY, PhotosIdentifier
 from .library import (
@@ -70,6 +70,16 @@ GET_ALBUM_PHOTOS_SCHEMA = vol.Schema(
 )
 
 
+INSPECT_ZONES_SCHEMA = vol.Schema(
+    {
+        vol.Optional(ATTR_ACCOUNT): cv.string,
+        vol.Optional("limit", default=200): vol.All(
+            vol.Coerce(int), vol.Range(min=1, max=500)
+        ),
+    }
+)
+
+
 @callback
 def async_setup_services(hass: HomeAssistant) -> None:
     """Register the integration's services."""
@@ -78,6 +88,13 @@ def async_setup_services(hass: HomeAssistant) -> None:
         SERVICE_GET_ALBUM_PHOTOS,
         _async_get_album_photos,
         schema=GET_ALBUM_PHOTOS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_INSPECT_ZONES,
+        _async_inspect_zones,
+        schema=INSPECT_ZONES_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 
@@ -142,8 +159,8 @@ async def _async_get_album_photos(call: ServiceCall) -> ServiceResponse:
             )
             refs = account.list_album(
                 api,
-                SHARED_ALBUMS_ZONE,
-                info.album_id,
+                info.zone,
+                info.source_album,
                 max_items=options[CONF_MAX_ITEMS],
                 include_videos=options[CONF_INCLUDE_VIDEOS],
                 ttl=options[CONF_CACHE_TTL],
@@ -193,3 +210,25 @@ async def _async_get_album_photos(call: ServiceCall) -> ServiceResponse:
         }
 
     raise ServiceValidationError("; ".join(not_found))
+
+
+async def _async_inspect_zones(call: ServiceCall) -> ServiceResponse:
+    """Describe the iCloud photo zones (diagnostics for Shared Albums)."""
+    hass = call.hass
+    if _own_entry(hass) is None:
+        raise ServiceValidationError(
+            "The iCloud Shared Photos integration is not loaded"
+        )
+    accounts: dict[str, Any] = {}
+    for entry in _select_entries(hass, call.data.get(ATTR_ACCOUNT)):
+        account = _account_cache(hass, entry)
+        api = _icloud_api(entry)
+        try:
+            accounts[entry.title] = await hass.async_add_executor_job(
+                lambda account=account, api=api: account.inspect_zones(
+                    api, limit=call.data["limit"]
+                )
+            )
+        except PhotosUnavailableError as err:
+            accounts[entry.title] = {"error": str(err)}
+    return {"accounts": accounts}

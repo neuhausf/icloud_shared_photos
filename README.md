@@ -15,7 +15,7 @@ Medien
     ├── Personal Library        (PrimarySync)
     │   ├── Library
     │   └── Favorites
-    ├── Shared Albums           (geteilte Alben / Photo Streams)
+    ├── Shared Albums           (geteilte Alben: Photo Streams + CloudKit)
     │   └── <Albumname> …
     └── iCloud Favorites
         ├── Personal Favorites
@@ -197,6 +197,19 @@ pytest -q
 
 Die Integration steuert selbst **keinen** Fotorahmen an. Sie liefert aber signierte, zeitlich begrenzte URLs, die jede andere Integration ohne Login abrufen kann. Mit der Standardoption „Automatisch“ kommen HEIC-Fotos dabei als JPEG an (die BLOOMIN8-Integration kann kein HEIC lesen).
 
+### Geteilte Alben: zwei Formate
+
+Apple führt geteilte Alben in zwei Formaten:
+
+* **Klassisch (Photo Streams):** Album-ID ist eine GUID (`5FD857E3-…`). Gelesen über pyicloud's `shared_streams`.
+* **CloudKit (neu):** Der icloud.com-Link hat die Form `…/sharedalbums/sc,…`. Das Album ist eine eigene CloudKit-Zone `SharedCollection-<UUID>` mit einer normalen Fotos-Mediathek; seine Fotos sind deren Smart Album `Library`. pyicloud listet diese Zonen, bietet aber keine eigene API dafür. Der Albumname stammt aus dem (einzigen) `CPLAlbum`-Datensatz der Zone; fehlt er, heißt das Album „Shared Album <UUID-Anfang>“ und ist auch über die Zonen-ID ansprechbar.
+
+Beide erscheinen unter *Shared Albums* und funktionieren mit `get_album_photos`. Neu geteilte Alben werden ohne Neustart erkannt (Cache-Dauer der Albumlisten).
+
+### Diagnose: `icloud_shared_photos.inspect_zones`
+
+Listet alle Foto-Zonen eines Kontos und beschreibt die Datensätze der `SharedCollection-*`-Zonen: Datensatztypen, Feldnamen, kurze Textwerte von Nicht-Foto-Datensätzen (z. B. Albumtitel) sowie Anzahl und Dateinamen der gefundenen Fotos. Download-URLs und Bilddaten werden nie ausgegeben.
+
 ### Dienst `icloud_shared_photos.get_album_photos`
 
 | Feld | Pflicht | Bedeutung |
@@ -309,6 +322,7 @@ Alternativ lässt sich jedes Foto auch über `media_content_id` mit `media_sourc
 
 * **Kein offizieller Core-Vertrag:** `entry.runtime_data.api` ist ein internes Detail der Core-Integration `icloud`. Wird es in einer künftigen HA-Version umbenannt, zeigt der Browser einen verständlichen Fehler statt Fotos, und die Integration muss angepasst werden. Die Stelle ist in `media_source.py::_icloud_api` gekapselt.
 * **pyicloud-Umfang:** pyicloud unterstützt in Shared Libraries derzeit nur `Library` und `Favorites`. Benutzeralben innerhalb der geteilten Mediathek und gemischte Ansichten fehlen.
+* **CloudKit-Geteilte-Alben** (`SharedCollection-*`) werden über pyicloud's allgemeine Mediathek-Abfragen gelesen, nicht über eine dafür vorgesehene API. Ändert Apple das Format dieser Zonen, kann das Auslesen ausfallen; `inspect_zones` hilft bei der Analyse.
 * **Geteilte Alben** (Photo Streams) laufen über pyicloud's ältere Shared-Streams-API. Einzelne Fotos werden dort durch Blättern im Album gesucht; bei sehr großen geteilten Alben ist der erste Abruf nach Ablauf des Caches daher langsamer.
 * **Große Mediatheken:** `Library` kann zehntausende Einträge haben. Daher gibt es das Limit „Maximale Anzahl Fotos pro Album“. `Library` wird von neu nach alt gelistet. Persönliche Favoriten liefert iCloud von alt nach neu: Hat man mehr Favoriten als das Limit, fehlen die neuesten. In dem Fall das Limit erhöhen.
 * **Signierte Download-URLs laufen ab.** Deshalb gibt es die 30-Minuten-TTL und den automatischen Retry. Eine kurze Verzögerung beim ersten Abruf nach längerer Zeit ist normal.

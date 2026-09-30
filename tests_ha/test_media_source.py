@@ -234,7 +234,12 @@ async def test_shared_albums_browse(
     albums = await media_source.async_browse_media(
         hass, root.children[2].media_content_id
     )
-    assert [c.title for c in albums.children] == ["Bilderrahmen"]
+    assert [c.title for c in albums.children] == ["Bilderrahmen", "Fotorahmen"]
+    collection = await media_source.async_browse_media(
+        hass, albums.children[1].media_content_id
+    )
+    assert collection.title.endswith("Shared Albums / Fotorahmen")
+    assert [c.title for c in collection.children] == ["IMG_1000.HEIC"]
     album = await media_source.async_browse_media(
         hass, albums.children[0].media_content_id
     )
@@ -306,3 +311,41 @@ async def test_get_album_photos_service(
             blocking=True,
             return_response=True,
         )
+
+
+async def test_get_album_photos_cloudkit_album(
+    hass: HomeAssistant, setup: MockConfigEntry
+) -> None:
+    """CloudKit Shared Albums (SharedCollection zones) work with the service."""
+    from homeassistant.core_config import async_process_ha_core_config
+
+    await async_process_ha_core_config(
+        hass, {"internal_url": "http://192.168.1.10:8123"}
+    )
+    response = await hass.services.async_call(
+        DOMAIN,
+        "get_album_photos",
+        {"album": "Fotorahmen"},
+        blocking=True,
+        return_response=True,
+    )
+    assert response["album"] == "Fotorahmen"
+    assert response["album_id"].startswith("SharedCollection-")
+    assert [p["filename"] for p in response["photos"]] == ["IMG_1000.HEIC"]
+    assert "/lib/SharedCollection-" in response["photos"][0]["media_content_id"]
+
+
+async def test_inspect_zones_service(
+    hass: HomeAssistant, setup: MockConfigEntry
+) -> None:
+    """The diagnostic service lists zones and Shared Album zones."""
+    response = await hass.services.async_call(
+        DOMAIN, "inspect_zones", {}, blocking=True, return_response=True
+    )
+    report = response["accounts"]["me@example.com"]
+    assert any(
+        (z["zone"] or "").startswith("SharedCollection-") for z in report["zones"]
+    )
+    (collection,) = report["shared_album_zones"]
+    assert collection["library_items"] == 1
+    assert collection["library_filenames"] == ["IMG_1000.HEIC"]
