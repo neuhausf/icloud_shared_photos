@@ -270,7 +270,12 @@ def test_new_shared_album_is_found(api: MagicMock) -> None:
 
 
 def test_cloudkit_shared_album(api: MagicMock) -> None:
-    """A SharedCollection zone is a Shared Album titled by its album record."""
+    """A SharedCollection zone is a Shared Album titled by its share record.
+
+    iCloud rejects index queries in these zones, so photos come from the
+    zone's change feed (paged), newest first, without deleted or orphaned
+    records.
+    """
     account = AccountPhotos("test")
     info = account.find_shared_album(api, "fotorahmen", ttl=60)
     assert info.album_id == COLLECTION_ZONE
@@ -284,18 +289,26 @@ def test_cloudkit_shared_album(api: MagicMock) -> None:
         include_videos=False,
         ttl=60,
     )
-    assert [ref.photo_id for ref in refs] == ["C1"]
+    assert [ref.photo_id for ref in refs] == ["C2", "C1"]
+    assert [ref.photo.filename for ref in refs] == ["IMG_1001.JPG", "IMG_1000.HEIC"]
+    photo = account.get_photo(api, info.zone, info.source_album, "C1", refresh=True)
+    assert photo.resources["medium"].url == "https://cdn.example/C1/med"
+    with pytest.raises(PhotoNotFoundError):
+        account.get_photo(api, info.zone, info.source_album, "C3", refresh=True)
     assert account.find_shared_album(api, COLLECTION_ZONE, ttl=60).title == (
         "Fotorahmen"
     )
 
 
 def test_collection_title_fallback() -> None:
-    """Without exactly one album record the zone gives a placeholder title."""
+    """Without a share title the zone gives a placeholder title."""
     from isp.library import LibraryInfo, _collection_title
 
     library = MagicMock()
-    library.albums = []
+    library.zone_id = {"zoneName": COLLECTION_ZONE}
+    library._client._client._http.post.return_value = {
+        "zones": [{"records": [], "moreComing": False}]
+    }
     info = LibraryInfo(
         zone=COLLECTION_ZONE, shared=False, library=library, collection=True
     )
@@ -315,6 +328,7 @@ def test_inspect_collection_summarizes_records() -> None:
         "zones": [
             {
                 "moreComing": False,
+                "syncToken": "done",
                 "records": [
                     {
                         "recordType": "CPLAlbum",

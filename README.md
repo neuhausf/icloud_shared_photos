@@ -202,7 +202,7 @@ Die Integration steuert selbst **keinen** Fotorahmen an. Sie liefert aber signie
 Apple führt geteilte Alben in zwei Formaten:
 
 * **Klassisch (Photo Streams):** Album-ID ist eine GUID (`5FD857E3-…`). Gelesen über pyicloud's `shared_streams`.
-* **CloudKit (neu):** Der icloud.com-Link hat die Form `…/sharedalbums/sc,…`. Das Album ist eine eigene CloudKit-Zone `SharedCollection-<UUID>` mit einer normalen Fotos-Mediathek; seine Fotos sind deren Smart Album `Library`. pyicloud listet diese Zonen, bietet aber keine eigene API dafür. Der Albumname stammt aus dem (einzigen) `CPLAlbum`-Datensatz der Zone; fehlt er, heißt das Album „Shared Album <UUID-Anfang>“ und ist auch über die Zonen-ID ansprechbar.
+* **CloudKit (neu):** Der icloud.com-Link hat die Form `…/sharedalbums/sc,…`. Das Album ist eine eigene CloudKit-Zone `SharedCollection-<UUID>` mit `CPLMaster`/`CPLAsset`-Datensätzen wie in einer Mediathek, dazu Beiträge, Kommentare und Reaktionen. iCloud lehnt Index-Abfragen in diesen Zonen ab (`Index has invalid data`), deshalb liest die Integration Fotos und Titel aus dem Änderungs-Feed der Zone (`changes/zone`). Der Albumname ist `cloudkit.title` des `cloudkit.share`-Datensatzes; fehlt er, heißt das Album „Shared Album <UUID-Anfang>“. Es ist auch über die Zonen-ID ansprechbar.
 
 Beide erscheinen unter *Shared Albums* und funktionieren mit `get_album_photos`. Neu geteilte Alben werden ohne Neustart erkannt (Cache-Dauer der Albumlisten).
 
