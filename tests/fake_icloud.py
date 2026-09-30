@@ -60,22 +60,6 @@ DATA: dict[str, dict[str, list[dict[str, Any]]]] = {
         )
         + _photo("P2", "dup.heic", 1_650_000_000_000, "fp-dup"),
     },
-    COLLECTION_ZONE: {
-        "CPLAssetAndMasterInSmartAlbumByAssetDate": [],
-        "CPLAssetAndMasterByAssetDateWithoutHiddenOrDeleted": _photo(
-            "C1", "IMG_1000.HEIC", 1_740_000_000_000, "fp-c1"
-        ),
-        "CPLAlbumByPositionLive": [
-            {
-                "recordName": "ALB-1",
-                "recordType": "CPLAlbum",
-                "fields": {
-                    "albumNameEnc": {"value": base64.b64encode(b"Fotorahmen").decode()},
-                    "albumType": {"value": 0},
-                },
-            }
-        ],
-    },
     SHARED_ZONE: {
         "CPLAssetAndMasterInSmartAlbumByAssetDate": _photo(
             "S1", "shared-fav.heic", 1_700_000_000_000, "fp-s1"
@@ -90,6 +74,32 @@ DATA: dict[str, dict[str, list[dict[str, Any]]]] = {
 }
 
 
+# CloudKit Shared Album zone as observed on a real account: photos plus a
+# share record carrying the title; index queries fail with BAD_REQUEST.
+COLLECTION_RECORDS = (
+    _photo("C1", "IMG_1000.HEIC", 1_740_000_000_000, "fp-c1")
+    + _photo("C2", "IMG_1001.JPG", 1_750_000_000_000, "fp-c2", "public.jpeg")
+    + [
+        {"recordName": "M-orphan", "recordType": "CPLMaster", "fields": {}},
+        {"recordName": "C3", "recordType": "CPLAsset", "deleted": True},
+        {
+            "recordName": "share",
+            "recordType": "cloudkit.share",
+            "fields": {
+                "cloudkit.title": {"type": "STRING", "value": "Fotorahmen"},
+                "cloudkit.type": {
+                    "type": "STRING",
+                    "value": "photos_sharedcollections",
+                },
+            },
+        },
+        {
+            "recordName": "comment",
+            "recordType": "CPLTextComment",
+            "fields": {"commentText": {"type": "STRING", "value": "Ferien!"}},
+        },
+    ]
+)
 SHARED_ALBUM_GUID = "5FD857E3-B35A-4442-93BD-001C8A1A9928"
 SHARED_ALBUM_RECORDS = _photo(
     "A1", "IMG_0356.HEIC", 1_720_000_000_000, "fp-a1"
@@ -119,6 +129,43 @@ def _json_response(data: dict[str, Any]) -> MagicMock:
 
 
 def _fake_post(url: str, json: dict[str, Any] | None = None, **_: Any) -> MagicMock:
+    if "changes/zone" in url:
+        assert json is not None
+        zone_req = json["zones"][0]
+        assert zone_req["zoneID"]["zoneName"] == COLLECTION_ZONE
+        wanted = zone_req.get("desiredRecordTypes")
+        records = [
+            r
+            for r in COLLECTION_RECORDS
+            if wanted is None or r.get("recordType") in wanted
+        ]
+        # two pages to exercise moreComing/syncToken paging
+        if "syncToken" not in zone_req:
+            return _json_response(
+                {
+                    "zones": [
+                        {
+                            "zoneID": zone_req["zoneID"],
+                            "records": records[:3],
+                            "moreComing": True,
+                            "syncToken": "page-2",
+                        }
+                    ]
+                }
+            )
+        assert zone_req["syncToken"] == "page-2"
+        return _json_response(
+            {
+                "zones": [
+                    {
+                        "zoneID": zone_req["zoneID"],
+                        "records": records[3:],
+                        "moreComing": False,
+                        "syncToken": "done",
+                    }
+                ]
+            }
+        )
     if "webgetalbumslist" in url:
         return _json_response({"albums": SHARED_ALBUMS})
     if "webgetassetcount" in url:
@@ -156,4 +203,8 @@ def _fake_post(url: str, json: dict[str, Any] | None = None, **_: Any) -> MagicM
             {"records": [{"fields": {"state": {"value": "FINISHED"}}}]}
         )
     zone = json["zoneID"]["zoneName"]
+    if zone == COLLECTION_ZONE and record_type != "CheckIndexingState":
+        return _json_response(
+            {"serverErrorCode": "BAD_REQUEST", "reason": "Index has invalid data"}
+        )
     return _json_response({"records": DATA.get(zone, {}).get(record_type, [])})

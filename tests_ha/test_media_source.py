@@ -239,7 +239,10 @@ async def test_shared_albums_browse(
         hass, albums.children[1].media_content_id
     )
     assert collection.title.endswith("Shared Albums / Fotorahmen")
-    assert [c.title for c in collection.children] == ["IMG_1000.HEIC"]
+    assert [c.title for c in collection.children] == [
+        "IMG_1001.JPG",
+        "IMG_1000.HEIC",
+    ]
     album = await media_source.async_browse_media(
         hass, albums.children[0].media_content_id
     )
@@ -331,7 +334,10 @@ async def test_get_album_photos_cloudkit_album(
     )
     assert response["album"] == "Fotorahmen"
     assert response["album_id"].startswith("SharedCollection-")
-    assert [p["filename"] for p in response["photos"]] == ["IMG_1000.HEIC"]
+    assert [p["filename"] for p in response["photos"]] == [
+        "IMG_1001.JPG",
+        "IMG_1000.HEIC",
+    ]
     assert "/lib/SharedCollection-" in response["photos"][0]["media_content_id"]
 
 
@@ -347,5 +353,7 @@ async def test_inspect_zones_service(
         (z["zone"] or "").startswith("SharedCollection-") for z in report["zones"]
     )
     (collection,) = report["shared_album_zones"]
-    assert collection["library_items"] == 1
-    assert collection["library_filenames"] == ["IMG_1000.HEIC"]
+    assert collection["library_items"] == 2
+    assert collection["text_values"]["cloudkit.share"]["cloudkit.title"] == [
+        "Fotorahmen"
+    ]

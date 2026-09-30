@@ -11,8 +11,9 @@ delegated to pyicloud (``PhotosService.libraries`` / ``PhotoLibrary.albums`` /
 * selection of the Shared Library (``SharedSync-*``) zones,
 * access to legacy Shared Albums (photo streams) under the pseudo zone
   ``SharedAlbums``, with the album GUID as album name,
-* access to the newer CloudKit Shared Albums (``SharedCollection-*`` zones),
-  whose photos are the ``Library`` smart album of their zone,
+* access to the newer CloudKit Shared Albums (``SharedCollection-*`` zones).
+  iCloud rejects index queries in these zones, so their photos and title are
+  read from the zone's change feed (``changes/zone``) instead,
 * in-RAM caching of album listings and resolved assets,
 * merging of personal and shared favorites without duplicates.
 """
@@ -31,6 +32,7 @@ import threading
 import time
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlencode
 
 from .const import (
     ALBUM_FAVORITES,
@@ -441,6 +443,8 @@ class AccountPhotos:
         info = self.libraries(api).get(zone)
         if info is None:
             raise PhotoNotFoundError(f"Photo library '{zone}' not found")
+        if info.collection:
+            return SharedCollectionAlbum(info.library)
         try:
             albums = info.library.albums
             album = albums.get(album_name) or albums.find(album_name)
@@ -739,19 +743,10 @@ def _inspect_collection(
         "scope": getattr(library, "scope", None),
     }
     try:
-        http = library._client._client._http  # noqa: SLF001
-        data = http.post(
-            "/changes/zone",
-            {
-                "zones": [{"zoneID": report["zone_id"]}],
-                "resultsLimit": limit,
-            },
-        )
+        records, truncated = _zone_changes(library, max_records=limit)
     except Exception as err:  # noqa: BLE001 - diagnostic, report any failure
         report["changes_error"] = f"{type(err).__name__}: {err}"
-        data = {}
-    zone_data = (data.get("zones") or [{}])[0] if isinstance(data, dict) else {}
-    records = zone_data.get("records") or []
+        records, truncated = [], False
     record_types: dict[str, int] = {}
     fields: dict[str, dict[str, str]] = {}
     texts: dict[str, dict[str, list[str]]] = {}
@@ -774,7 +769,7 @@ def _inspect_collection(
                 values.append(text)
     report.update(
         records_scanned=len(records),
-        more_coming=zone_data.get("moreComing"),
+        more_coming=truncated,
         record_types=record_types,
         fields=fields,
         text_values=texts,
@@ -800,19 +795,138 @@ def _inspect_collection(
 def _collection_title(info: LibraryInfo) -> str:
     """Return the title of a CloudKit Shared Album zone.
 
-    If the zone holds exactly one regular album record, its name is the title
-    of the shared album; otherwise a placeholder derived from the zone is used.
+    The title is the ``cloudkit.title`` of the zone's share record; if it
+    cannot be read, a placeholder derived from the zone name is used.
     """
     try:
-        names = [
-            str(album.title)
-            for album in info.library.albums
-            if type(album).__name__ == "PhotoAlbum" and album.title
-        ]
+        records, _ = _zone_changes(
+            info.library, record_types=[_SHARE_RECORD_TYPE], max_records=50
+        )
     except (*ICLOUD_ERRORS, AttributeError, KeyError, TypeError, ValueError) as err:
-        _LOGGER.debug("Cannot read album records of %s: %s", info.zone, err)
-        names = []
-    if len(names) == 1:
-        return names[0]
-    _LOGGER.debug("Album names in %s: %s", info.zone, names)
+        _LOGGER.debug("Cannot read the share record of %s: %s", info.zone, err)
+        records = []
+    for record in records:
+        if record.get("recordType") != _SHARE_RECORD_TYPE:
+            continue
+        title = (record.get("fields") or {}).get("cloudkit.title", {}).get("value")
+        if isinstance(title, str) and title.strip():
+            return title.strip()
     return collection_placeholder_title(info.zone)
+
+
+_SHARE_RECORD_TYPE = "cloudkit.share"
+_MAX_COLLECTION_RECORDS = 20000
+
+
+def _zone_changes(
+    library: Any,
+    *,
+    record_types: list[str] | None = None,
+    max_records: int = _MAX_COLLECTION_RECORDS,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Read the current records of a zone from its change feed.
+
+    Returns the live (non-deleted) raw records and whether the feed was
+    truncated at ``max_records``.
+    """
+    zone_request: dict[str, Any] = {"zoneID": dict(library.zone_id)}
+    if record_types:
+        zone_request["desiredRecordTypes"] = record_types
+    client = getattr(library, "_client", None)
+    if client is not None:
+        http = client._client._http  # noqa: SLF001
+
+        def post(payload: dict[str, Any]) -> dict[str, Any]:
+            return http.post("/changes/zone", payload)
+
+    else:  # untyped pyicloud session (tests)
+        service = library.service
+        url = f"{service.service_endpoint}/changes/zone?{urlencode(service.params)}"
+
+        def post(payload: dict[str, Any]) -> dict[str, Any]:
+            return service.session.post(url, json=payload).json()
+
+    records: list[dict[str, Any]] = []
+    while True:
+        data = post({"zones": [zone_request], "resultsLimit": 200})
+        zone = (data.get("zones") or [{}])[0]
+        if zone.get("serverErrorCode"):
+            raise CloudKitApiError(
+                f"{zone.get('serverErrorCode')}: {zone.get('reason', '')}"
+            )
+        records.extend(
+            record
+            for record in zone.get("records") or []
+            if isinstance(record, dict)
+            and not record.get("deleted")
+            and not record.get("serverErrorCode")
+        )
+        if not zone.get("moreComing") or not zone.get("syncToken"):
+            return records, False
+        if len(records) >= max_records:
+            return records, True
+        zone_request["syncToken"] = zone["syncToken"]
+
+
+class SharedCollectionAlbum:
+    """The photos of a CloudKit Shared Album zone, read from its change feed.
+
+    Quacks like the pyicloud album objects used by :class:`AccountPhotos`
+    (``photos``, ``get()``, ``len()``).
+    """
+
+    def __init__(self, library: Any) -> None:
+        """Initialize."""
+        self._library = library
+
+    def _load(self) -> list[Any]:
+        records, truncated = _zone_changes(
+            self._library, record_types=["CPLMaster", "CPLAsset"]
+        )
+        if truncated:
+            _LOGGER.warning(
+                "Shared album zone %s has more than %d records; "
+                "only the first ones are listed",
+                self._library.zone_id.get("zoneName"),
+                _MAX_COLLECTION_RECORDS,
+            )
+        masters: dict[str, dict[str, Any]] = {}
+        assets: list[dict[str, Any]] = []
+        for record in records:
+            if record.get("recordType") == "CPLMaster":
+                masters[str(record.get("recordName"))] = record
+            elif record.get("recordType") == "CPLAsset":
+                assets.append(record)
+        photos = []
+        for asset in assets:
+            fields = asset.get("fields") or {}
+            if _field_value(fields, "isHidden") or _field_value(fields, "trashReason"):
+                continue
+            master_ref = _field_value(fields, "masterRef")
+            master_name = (
+                master_ref.get("recordName") if isinstance(master_ref, dict) else None
+            )
+            if (master := masters.get(str(master_name))) is None:
+                continue
+            photo = self._library.asset_type(self._library.service, master, asset)
+            photos.append(photo)
+        photos.sort(key=asset_date, reverse=True)
+        return photos
+
+    @property
+    def photos(self) -> Iterable[Any]:
+        """Return the photos, newest first."""
+        return iter(self._load())
+
+    def get(self, photo_id: str) -> Any:
+        """Return a photo by asset id, or None."""
+        return next((p for p in self._load() if str(p.id) == photo_id), None)
+
+    def __len__(self) -> int:
+        """Return the number of photos."""
+        return len(self._load())
+
+
+def _field_value(fields: dict[str, Any], name: str) -> Any:
+    value = fields.get(name)
+    return value.get("value") if isinstance(value, dict) else None
