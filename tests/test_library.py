@@ -192,3 +192,44 @@ def test_merge_favorites_without_fingerprints() -> None:
     assert len(merge_favorites([refs, refs])) == 1
     other = [PhotoRef(zone="b", album="Favorites", photo=photo)]
     assert len(merge_favorites([refs, other])) == 2
+
+
+def test_shared_albums(api: MagicMock) -> None:
+    """Legacy Shared Albums are listed and found by title or id."""
+    from isp.const import SHARED_ALBUMS_ZONE
+
+    from .fake_icloud import SHARED_ALBUM_GUID
+
+    account = AccountPhotos("test")
+    albums = account.shared_albums(api, ttl=60)
+    assert [info.title for info in albums.values()] == ["Bilderrahmen"]
+    assert account.find_shared_album(api, "bilderrahmen ", ttl=60).album_id == (
+        SHARED_ALBUM_GUID
+    )
+    assert account.find_shared_album(api, SHARED_ALBUM_GUID, ttl=60).title == (
+        "Bilderrahmen"
+    )
+    with pytest.raises(PhotoNotFoundError, match="available: Bilderrahmen"):
+        account.find_shared_album(api, "Ferien", ttl=60)
+
+    refs = account.list_album(
+        api,
+        SHARED_ALBUMS_ZONE,
+        SHARED_ALBUM_GUID,
+        max_items=50,
+        include_videos=False,
+        ttl=60,
+    )
+    assert [ref.photo_id for ref in refs] == ["A1", "A2"]
+    assert {ref.zone for ref in refs} == {SHARED_ALBUMS_ZONE}
+
+    from isp.library import photo_resources
+
+    photo = account.get_photo(
+        api, SHARED_ALBUMS_ZONE, SHARED_ALBUM_GUID, "A1", refresh=True
+    )
+    resources = photo_resources(photo)
+    assert resources["medium"].url == "https://cdn.example/A1/med"
+    assert resources["original"].type == "public.heic"
+    with pytest.raises(PhotoNotFoundError):
+        account.get_photo(api, SHARED_ALBUMS_ZONE, "unknown-guid", "Z9")

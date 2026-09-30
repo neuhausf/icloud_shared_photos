@@ -1,4 +1,4 @@
-"""iCloud Shared Photos: expose the iCloud Shared Photo Library as a media source.
+"""iCloud Shared Photos: expose iCloud Shared Library and Shared Albums as media.
 
 This integration does not log in to iCloud itself. It reuses the authenticated
 ``PyiCloudService`` of the Home Assistant core ``icloud`` integration, so there
@@ -18,6 +18,7 @@ from homeassistant.helpers.typing import ConfigType
 from .const import DOMAIN
 from .library import AccountPhotos
 from .media_source import async_register_view
+from .services import async_setup_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,8 +36,9 @@ type IcloudSharedPhotosConfigEntry = ConfigEntry[IcloudSharedPhotosData]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Set up the integration (registers the streaming HTTP view once)."""
+    """Set up the integration (registers the streaming HTTP view and services)."""
     async_register_view(hass)
+    async_setup_services(hass)
     return True
 
 

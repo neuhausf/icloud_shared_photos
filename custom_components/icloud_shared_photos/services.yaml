@@ -1,0 +1,20 @@
+get_album_photos:
+  fields:
+    album:
+      required: true
+      example: "Bilderrahmen"
+      selector:
+        text:
+    account:
+      example: "me@icloud.com"
+      selector:
+        text:
+    expires:
+      default: 3600
+      selector:
+        number:
+          min: 60
+          max: 604800
+          step: 60
+          unit_of_measurement: s
+          mode: box
