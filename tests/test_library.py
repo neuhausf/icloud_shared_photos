@@ -273,8 +273,8 @@ def test_cloudkit_shared_album(api: MagicMock) -> None:
     """A SharedCollection zone is a Shared Album titled by its share record.
 
     iCloud rejects index queries in these zones, so photos come from the
-    zone's change feed (paged), newest first, without deleted or orphaned
-    records.
+    zone's change feed (paged), newest first, without tombstoned, deleted
+    (isDeleted) or orphaned records.
     """
     account = AccountPhotos("test")
     info = account.find_shared_album(api, "fotorahmen", ttl=60)
@@ -295,6 +295,9 @@ def test_cloudkit_shared_album(api: MagicMock) -> None:
     assert photo.resources["medium"].url == "https://cdn.example/C1/med"
     with pytest.raises(PhotoNotFoundError):
         account.get_photo(api, info.zone, info.source_album, "C3", refresh=True)
+    # removed from the album: still in the zone, but flagged isDeleted
+    with pytest.raises(PhotoNotFoundError):
+        account.get_photo(api, info.zone, info.source_album, "C4", refresh=True)
     assert account.find_shared_album(api, COLLECTION_ZONE, ttl=60).title == (
         "Fotorahmen"
     )

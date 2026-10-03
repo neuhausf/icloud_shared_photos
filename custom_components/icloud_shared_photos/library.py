@@ -815,6 +815,7 @@ def _collection_title(info: LibraryInfo) -> str:
 
 
 _SHARE_RECORD_TYPE = "cloudkit.share"
+_ASSET_EXCLUDE_FLAGS = ("isDeleted", "isExpunged", "isHidden", "trashReason")
 _MAX_COLLECTION_RECORDS = 20000
 
 
@@ -900,7 +901,9 @@ class SharedCollectionAlbum:
         photos = []
         for asset in assets:
             fields = asset.get("fields") or {}
-            if _field_value(fields, "isHidden") or _field_value(fields, "trashReason"):
+            # Photos removed from a shared album stay in the zone, flagged as
+            # deleted/expunged, until iCloud purges them.
+            if any(_field_value(fields, flag) for flag in _ASSET_EXCLUDE_FLAGS):
                 continue
             master_ref = _field_value(fields, "masterRef")
             master_name = (

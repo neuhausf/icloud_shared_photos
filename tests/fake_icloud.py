@@ -76,9 +76,11 @@ DATA: dict[str, dict[str, list[dict[str, Any]]]] = {
 
 # CloudKit Shared Album zone as observed on a real account: photos plus a
 # share record carrying the title; index queries fail with BAD_REQUEST.
+# Photos removed from the album stay as CPLAsset flagged isDeleted.
 COLLECTION_RECORDS = (
     _photo("C1", "IMG_1000.HEIC", 1_740_000_000_000, "fp-c1")
     + _photo("C2", "IMG_1001.JPG", 1_750_000_000_000, "fp-c2", "public.jpeg")
+    + _photo("C4", "IMG_1004.HEIC", 1_760_000_000_000, "fp-c4")
     + [
         {"recordName": "M-orphan", "recordType": "CPLMaster", "fields": {}},
         {"recordName": "C3", "recordType": "CPLAsset", "deleted": True},
@@ -208,3 +210,13 @@ def _fake_post(url: str, json: dict[str, Any] | None = None, **_: Any) -> MagicM
             {"serverErrorCode": "BAD_REQUEST", "reason": "Index has invalid data"}
         )
     return _json_response({"records": DATA.get(zone, {}).get(record_type, [])})
+
+
+def _mark_deleted(records: list[dict[str, Any]], rec: str) -> None:
+    for record in records:
+        if record["recordName"] == rec:
+            record["fields"]["isDeleted"] = {"type": "INT64", "value": 1}
+            record["fields"]["isExpunged"] = {"type": "INT64", "value": 0}
+
+
+_mark_deleted(COLLECTION_RECORDS, "C4")
